@@ -1,0 +1,27 @@
+# Create project structure
+mkdir facebook-messenger
+cd facebook-messenger
+
+# Setup frontend
+npx create-react-app frontend
+cd frontend
+npm install @headlessui/react @heroicons/react tailwindcss postcss autoprefixer
+npx tailwindcss init -p
+cd ..
+
+# Setup backend
+mkdir backend
+cd backend
+npm init -y
+npm install express body-parser dotenv puppeteer-extra puppeteer-extra-plugin-stealth winston cors puppeteer
+cd ..
+
+# Run the application (in separate terminals)
+
+# Terminal 1 (Frontend)
+cd frontend
+npm start
+
+# Terminal 2 (Backend)
+cd backend
+node server.js
