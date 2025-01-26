@@ -100,7 +100,7 @@ export default function MessageForm({ taskId }) {
           </label>
           <textarea
             required
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className="mt-1 block w-full bg-white rounded-md shadow-sm focus:outline-none border border-gray-300 p-3"
             rows={4}
             value={formData.cookies}
             onChange={(e) => setFormData({ ...formData, cookies: e.target.value })}
@@ -111,10 +111,9 @@ export default function MessageForm({ taskId }) {
           <label className="block text-sm font-medium text-gray-700">
             Friend IDs (comma-separated)
           </label>
-          <input
-            type="text"
+          <textarea
             required
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+              className="mt-1 block w-full bg-white rounded-md border-gray-300 shadow-sm focus:outline-none border p-3"
             value={formData.friendIds}
             onChange={(e) => setFormData({ ...formData, friendIds: e.target.value })}
           />
@@ -126,7 +125,7 @@ export default function MessageForm({ taskId }) {
           </label>
           <textarea
             required
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+            className="mt-1 block bg-white w-full rounded-md border-gray-300 shadow-sm focus:outline-none border p-3"
             rows={3}
             value={formData.message}
             onChange={(e) => setFormData({ ...formData, message: e.target.value })}
