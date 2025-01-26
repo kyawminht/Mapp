@@ -23,6 +23,20 @@ export default function TaskList({ tasks }) {
     });
   };
 
+  const getProgressText = (task) => {
+    if (!task.friendIds) return '';
+    const total = task.friendIds.split(',').length;
+    const current = task.result?.processedCount || 0;
+    return `${current}/${total}`;
+  };
+
+  const getProgressPercentage = (task) => {
+    if (!task.friendIds) return 0;
+    const total = task.friendIds.split(',').length;
+    const current = task.result?.processedCount || 0;
+    return Math.min((current / total) * 100, 100);
+  };
+
   return (
     <div className="bg-white shadow-sm rounded-lg p-6">
       <h2 className="text-lg font-medium text-gray-900 mb-4">Tasks</h2>
@@ -56,14 +70,46 @@ export default function TaskList({ tasks }) {
             <p className="text-sm text-gray-500">
               {new Date(task.timestamp).toLocaleString()}
             </p>
-            <p className="text-sm text-gray-500">
-              Friends: {task.friendIds}
-            </p>
-            {task.result && (
+            
+            {/* Progress section */}
+            <div className="mt-2">
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-sm font-medium text-gray-700">
+                  Progress: {getProgressText(task)}
+                </span>
+                <span className="text-sm font-medium text-gray-700">
+                  {Math.round(getProgressPercentage(task))}%
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div 
+                  className="bg-blue-600 h-2 rounded-full transition-all duration-500" 
+                  style={{ width: `${getProgressPercentage(task)}%` }}
+                ></div>
+              </div>
+            </div>
+
+            {/* Friends list */}
+            <div className="mt-2">
               <p className="text-sm text-gray-500">
-                Processed: {task.result.processedCount} / {task.result.totalCount}
+                Friends ({task.friendIds?.split(',').length || 0}):
               </p>
-            )}
+              <div className="mt-1 text-sm text-gray-600 max-h-20 overflow-y-auto">
+                {task.friendIds?.split(',').map((friendId, index) => (
+                  <div key={friendId} className="flex items-center space-x-2">
+                    <span className={
+                      index < (task.result?.processedCount || 0) 
+                        ? 'text-green-600' 
+                        : task.status === 'running' && index === (task.result?.processedCount || 0)
+                          ? 'text-yellow-600'
+                          : 'text-gray-500'
+                    }>
+                      • {friendId.trim()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         ))}
       </div>

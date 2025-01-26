@@ -18,13 +18,44 @@ const browsers = new Map();
 app.use(cors());
 app.use(bodyParser.json());
 
-// Function to generate random delay
-const randomDelay = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+// Function to generate random delay from a set of values
+const randomDelay = (values) => values[Math.floor(Math.random() * values.length)] * 1000;
+
+// Create a function to generate random delays for each task
+const createTaskDelays = () => {
+  return {
+    typing: [
+      Math.floor(Math.random() * (400 - 200) + 200), // 200-400ms
+      Math.floor(Math.random() * (500 - 300) + 300), // 300-500ms
+      Math.floor(Math.random() * (600 - 400) + 400)  // 400-600ms
+    ],
+    waiting: [
+      Math.floor(Math.random() * (8000 - 3000) + 3000),    // 3-8s
+      Math.floor(Math.random() * (12000 - 6000) + 6000),   // 6-12s
+      Math.floor(Math.random() * (15000 - 10000) + 10000)  // 10-15s
+    ],
+    betweenFriends: [
+      Math.floor(Math.random() * (420000 - 300000) + 300000),  // 5-7min
+      Math.floor(Math.random() * (600000 - 420000) + 420000),  // 7-10min
+      Math.floor(Math.random() * (900000 - 600000) + 600000)   // 10-15min
+    ]
+  };
+};
+
+// Function to get a random delay from task-specific delays
+const getRandomDelay = (delays, type) => {
+  const delayArray = delays[type];
+  return delayArray[Math.floor(Math.random() * delayArray.length)];
+};
 
 // Function to process messages
 async function processMessages(taskId, cookies, friendIds, message) {
-  const browser = await puppeteer.launch({ 
-    headless: true, // Changed to true for production
+  // Create unique delays for this task
+  const taskDelays = createTaskDelays();
+  
+  const browser = await puppeteer.launch({
+    executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    headless: true,
     defaultViewport: null,
     args: [
       '--start-maximized',
@@ -73,18 +104,18 @@ async function processMessages(taskId, cookies, friendIds, message) {
     addLog("Successfully logged in using cookies.");
 
     // Add a random delay between 20 to 40 seconds after logging in
-    const delayAfterLogin = randomDelay(20000, 40000);
+    const delayAfterLogin = randomDelay([3, 5, 6, 2, 1]);
     addLog(`Waiting ${delayAfterLogin / 1000} seconds before navigating to the first message...`);
     await new Promise((resolve) => setTimeout(resolve, delayAfterLogin));
 
     // Utility function to wait for an element with retries
-    const waitForElement = async (selector, timeout = 30000) => {
+    const waitForElement = async (selector, timeout = 40000) => {
       const startTime = Date.now();
       while (Date.now() - startTime < timeout) {
         const element = await page.$(selector);
         if (element) return element;
 
-        const delay = randomDelay(3000, 12000);
+        const delay = randomDelay([3, 5, 6, 2, 9]);
         addLog(`Element not found. Retrying in ${delay / 1000} seconds...`);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
@@ -100,7 +131,7 @@ async function processMessages(taskId, cookies, friendIds, message) {
         );
 
         if (continueButton) {
-          const delay = randomDelay(4000, 9000);
+          const delay = randomDelay([3, 5, 6, 2, 1,4]);
           addLog(`"Continue" button found. Clicking after ${delay / 1000} seconds...`);
           await new Promise((resolve) => setTimeout(resolve, delay));
           await continueButton.click();
@@ -116,66 +147,50 @@ async function processMessages(taskId, cookies, friendIds, message) {
       try {
         addLog("Waiting for the message input box...");
         const chatTextBoxContainer = await waitForElement('div[aria-label="Message"][contenteditable="true"][role="textbox"]');
-        addLog("Chat text box found, waiting 3 seconds before interacting...");
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        const initialDelay = getRandomDelay(taskDelays, 'waiting');
+        addLog(`Chat text box found, waiting ${initialDelay/1000} seconds before interacting...`);
+        await new Promise(resolve => setTimeout(resolve, initialDelay));
 
-        // Click the text box first
+        // Click with unique delay
         addLog("Clicking the chat text box...");
         await chatTextBoxContainer.click();
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, getRandomDelay(taskDelays, 'waiting')));
         
-        addLog("Focusing on the chat text box...");
-        await chatTextBoxContainer.focus();
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        // Clear any existing text
-        addLog("Clearing any existing text...");
-        await page.keyboard.down('Control');
-        await page.keyboard.press('A');
-        await page.keyboard.up('Control');
-        await page.keyboard.press('Backspace');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        addLog("Starting to type message...");
+        // Type with unique delays
         for (let char of message) {
-          await page.keyboard.type(char, { delay: randomDelay(100, 200) });
-          // Log every few characters to show progress
+          const typingDelay = getRandomDelay(taskDelays, 'typing');
+          await page.keyboard.type(char, { delay: typingDelay });
+          
           if (message.indexOf(char) % 10 === 0) {
+            const pauseDelay = getRandomDelay(taskDelays, 'waiting');
+            await new Promise(resolve => setTimeout(resolve, pauseDelay));
             addLog(`Typing progress: ${Math.round((message.indexOf(char) / message.length) * 100)}%`);
           }
         }
-        addLog("Finished typing message");
 
-        const sendDelay = randomDelay(2000, 4000);
-        addLog(`Waiting ${sendDelay / 1000} seconds before pressing Enter...`);
-        await new Promise((resolve) => setTimeout(resolve, sendDelay));
+        const sendDelay = getRandomDelay(taskDelays, 'waiting');
+        addLog(`Waiting ${sendDelay/1000} seconds before sending...`);
+        await new Promise(resolve => setTimeout(resolve, sendDelay));
 
-        addLog("Pressing Enter to send message...");
         await page.keyboard.press("Enter");
+        addLog("Message sent");
 
-        // Wait to verify message appears in chat
-        addLog("Verifying message appears in chat...");
-        try {
-          await page.waitForFunction(
-            (msg) => {
-              const messages = document.querySelectorAll('[role="row"]');
-              return Array.from(messages).some(m => m.textContent.includes(msg));
-            },
-            { timeout: 10000 },
-            message
-          );
-          addLog("Message confirmed to be sent and visible in chat");
-        } catch (error) {
-          addLog("Warning: Could not confirm message in chat");
-          throw new Error("Message might not have been sent successfully");
-        }
-
-        const postSendDelay = randomDelay(5000, 10000);
-        addLog(`Waiting ${postSendDelay / 1000} seconds after sending...`);
-        await new Promise((resolve) => setTimeout(resolve, postSendDelay));
+        const postSendDelay = getRandomDelay(taskDelays, 'waiting');
+        addLog(`Waiting ${postSendDelay/1000} seconds after sending...`);
+        await new Promise(resolve => setTimeout(resolve, postSendDelay));
       } catch (error) {
         addLog(`Error in sendMessage: ${error.message}`);
         throw error;
+      }
+    };
+
+    // Update the task state with progress
+    const updateTaskProgress = (taskId, processedCount, totalCount) => {
+      const task = tasks.get(taskId);
+      if (task) {
+        task.result = { processedCount, totalCount };
+        task.friendIds = task.friendIds || friendIds.join(','); // Store friend IDs if not already stored
       }
     };
 
@@ -184,6 +199,9 @@ async function processMessages(taskId, cookies, friendIds, message) {
       try {
         addLog(`Processing friend: ${friendId}...`);
         addLog(`Progress: ${processedCount} out of ${friendIds.length} friends processed.`);
+
+        // Update task progress before processing each friend
+        updateTaskProgress(taskId, processedCount, friendIds.length);
 
         // Navigate to the friend's message URL
         addLog(`Navigating to ${friendId}'s message URL...`);
@@ -199,13 +217,15 @@ async function processMessages(taskId, cookies, friendIds, message) {
         // Send the message
         await sendMessage();
 
-        // Increment the processed counter
+        // Increment the processed counter and update progress
         processedCount++;
+        updateTaskProgress(taskId, processedCount, friendIds.length);
 
+        // Add delay after processing the current friend
         if (index < friendIds.length - 1) {
-          const delayBetweenFriends = randomDelay(300000, 600000); // 5-10 minutes
-          addLog(`Waiting ${delayBetweenFriends / 1000 / 60} minutes before sending the next message...`);
-          await new Promise(resolve => setTimeout(resolve, delayBetweenFriends));
+          const betweenFriendsDelay = getRandomDelay(taskDelays, 'betweenFriends');
+          addLog(`Waiting ${betweenFriendsDelay/1000/60} minutes before next friend...`);
+          await new Promise(resolve => setTimeout(resolve, betweenFriendsDelay));
         }
       } catch (error) {
         addLog(`Error processing friend ${friendId}: ${error.message}`);
@@ -215,7 +235,6 @@ async function processMessages(taskId, cookies, friendIds, message) {
 
     // Final progress report
     tasks.get(taskId).status = 'completed';
-    tasks.get(taskId).result = { processedCount, totalCount: friendIds.length };
     addLog(`Finished processing all friends. Total processed: ${processedCount} out of ${friendIds.length}.`);
   } catch (error) {
     tasks.get(taskId).status = 'failed';
@@ -285,4 +304,4 @@ app.post('/api/task/:taskId/stop', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
-}); 
+});

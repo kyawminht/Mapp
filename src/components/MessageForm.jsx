@@ -63,35 +63,25 @@ export default function MessageForm({ taskId }) {
           const statusResponse = await fetch(`http://localhost:3001/api/task/${data.taskId}`);
           const statusData = await statusResponse.json();
           
-          // Filter and format logs to show only important steps
-          const filteredLogs = statusData.logs
-            .filter(log => 
-              log.includes('Processing friend') ||
-              log.includes('Waiting') ||
-              log.includes('Message sent successfully') ||
-              log.includes('Error')
-            )
-            .map(log => {
-              const timestamp = log.split(' - ')[0];
-              const message = log.split(' - ')[1];
-              return `${new Date(timestamp).toLocaleTimeString()} - ${message}`;
-            });
+          // Update task state
+          dispatch({
+            type: 'UPDATE_TASK',
+            payload: {
+              id: data.taskId,
+              status: statusData.status,
+              result: statusData.result,
+              logs: statusData.logs,
+              friendIds: formData.friendIds // Store friend IDs in task
+            }
+          });
 
-          setLogs(filteredLogs);
+          setLogs(statusData.logs);
           
           if (statusData.status === 'completed' || statusData.status === 'failed' || statusData.status === 'stopped') {
             clearInterval(pollIntervalRef.current);
-            dispatch({
-              type: 'UPDATE_TASK',
-              payload: {
-                id: data.taskId,
-                status: statusData.status,
-                result: statusData.result
-              }
-            });
             setIsLoading(false);
           }
-        }, 2000);
+        }, 1000); // Poll every second instead of 2 seconds
       } else {
         throw new Error(data.error || 'Failed to send messages');
       }
