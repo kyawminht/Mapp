@@ -14,6 +14,7 @@ mkdir backend
 cd backend
 npm init -y
 npm install express body-parser dotenv puppeteer-extra puppeteer-extra-plugin-stealth winston cors puppeteer
+mkdir controllers
 cd ..
 
 # Run the application (in separate terminals)
