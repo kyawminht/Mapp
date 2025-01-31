@@ -6,6 +6,11 @@ puppeteer.use(StealthPlugin());
 const tasks = new Map();
 const browsers = new Map();
 
+// Add memory management constants
+const MEMORY_CLEANUP_INTERVAL = 5; // Clean up every 5 friends processed
+const MAX_RETRIES = 5;
+const RETRY_DELAY = 10000; // 10 seconds
+
 // Utility functions
 const createTaskDelays = () => {
   return {
@@ -20,39 +25,40 @@ const getRandomDelay = (delays, type) => {
   return delayArray[Math.floor(Math.random() * delayArray.length)];
 };
 
-// Add error retry mechanism
-const retryOperation = async (operation, maxRetries = 3, delay = 5000) => {
+// Improve retry mechanism
+const retryOperation = async (operation, maxRetries = MAX_RETRIES, delay = RETRY_DELAY) => {
+  let lastError;
   for (let i = 0; i < maxRetries; i++) {
     try {
       return await operation();
     } catch (error) {
-      if (i === maxRetries - 1) throw error;
+      lastError = error;
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
+  throw lastError;
 };
+
+// Add page recreation helper
+async function createNewPage(browser, cookies) {
+  const page = await browser.newPage();
+  await page.setDefaultNavigationTimeout(120000); // Increase timeout to 2 minutes
+  await page.setDefaultTimeout(120000);
+  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+  await page.setCookie(...cookies);
+  
+  // Add error handlers
+  page.on('error', err => console.error('Page error:', err));
+  page.on('pageerror', err => console.error('Page error:', err));
+  
+  return page;
+}
 
 // Main message processing function
 async function processMessages(taskId, cookies, friendIds, message) {
   const taskDelays = createTaskDelays();
-  const browser = await puppeteer.launch({
-    headless: true,
-    defaultViewport: null,
-    args: [
-      '--start-maximized',
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage', // Add this to prevent memory issues
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--disable-gpu',
-      '--js-flags="--max-old-space-size=4096"' // Increase memory limit
-    ]
-  });
-
-  browsers.set(taskId, browser);
-  let page = await browser.newPage();
+  let browser = null;
+  let page = null;
   let processedCount = 0;
   const logs = [];
 
@@ -60,35 +66,56 @@ async function processMessages(taskId, cookies, friendIds, message) {
     const log = `${new Date().toISOString()} - ${message}`;
     console.log(log);
     logs.push(log);
-    tasks.get(taskId).logs = logs;
+    if (tasks.has(taskId)) {
+      tasks.get(taskId).logs = logs;
+    }
   };
 
   try {
-    // Initial setup
-    await page.setDefaultNavigationTimeout(60000);
-    await page.setDefaultTimeout(60000);
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-    await page.setCookie(...cookies);
+    // Launch browser with improved memory settings
+    browser = await puppeteer.launch({
+      headless: true,
+      defaultViewport: null,
+      args: [
+        '--start-maximized',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--js-flags="--max-old-space-size=8192"', // Increase to 8GB
+        '--memory-pressure-off',
+        '--single-process' // Reduce memory usage
+      ]
+    });
 
-    // Process each friend with recovery mechanism
+    browsers.set(taskId, browser);
+    page = await createNewPage(browser, cookies);
+
+    // Process each friend with improved error handling
     for (const [index, friendId] of friendIds.entries()) {
+      if (!tasks.has(taskId)) {
+        addLog('Task was stopped by user');
+        break;
+      }
+
       try {
-        // Recreate page if needed
-        if (!page) {
-          page = await browser.newPage();
-          await page.setDefaultNavigationTimeout(60000);
-          await page.setDefaultTimeout(60000);
-          await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-          await page.setCookie(...cookies);
+        // Recreate page periodically or if it's null
+        if (!page || processedCount % MEMORY_CLEANUP_INTERVAL === 0) {
+          if (page) {
+            await page.close().catch(console.error);
+          }
+          page = await createNewPage(browser, cookies);
+          addLog('Created new page for better stability');
         }
 
         addLog(`Processing friend ${friendId} (${processedCount + 1}/${friendIds.length})...`);
 
-        // Navigate with retry
+        // Navigate with improved retry
         await retryOperation(async () => {
           await page.goto(`https://www.facebook.com/messages/t/${friendId}`, {
             waitUntil: 'networkidle2',
-            timeout: 60000
+            timeout: 120000
           });
         });
 
@@ -98,7 +125,9 @@ async function processMessages(taskId, cookies, friendIds, message) {
         });
 
         processedCount++;
-        tasks.get(taskId).result = { processedCount, totalCount: friendIds.length };
+        if (tasks.has(taskId)) {
+          tasks.get(taskId).result = { processedCount, totalCount: friendIds.length };
+        }
 
         // Add delay between friends
         if (index < friendIds.length - 1) {
@@ -107,34 +136,31 @@ async function processMessages(taskId, cookies, friendIds, message) {
           await new Promise(resolve => setTimeout(resolve, betweenDelay));
         }
 
-        // Close and recreate page periodically to prevent memory issues
-        if (processedCount % 10 === 0) {
-          addLog("Refreshing browser page to prevent memory issues...");
-          await page.close();
-          page = null;
-          await new Promise(resolve => setTimeout(resolve, 5000));
-        }
-
       } catch (error) {
         addLog(`Error processing friend ${friendId}: ${error.message}`);
-        // Close and recreate page on error
+        // Try to recover by creating a new page
         if (page) {
-          await page.close();
+          await page.close().catch(console.error);
           page = null;
         }
-        await new Promise(resolve => setTimeout(resolve, 10000));
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
       }
     }
 
-    tasks.get(taskId).status = 'completed';
-    addLog(`Task completed. Processed ${processedCount} out of ${friendIds.length} friends.`);
+    if (tasks.has(taskId)) {
+      tasks.get(taskId).status = 'completed';
+      addLog(`Task completed. Processed ${processedCount} out of ${friendIds.length} friends.`);
+    }
   } catch (error) {
-    tasks.get(taskId).status = 'failed';
-    addLog(`Critical error: ${error.message}`);
+    if (tasks.has(taskId)) {
+      tasks.get(taskId).status = 'failed';
+      addLog(`Critical error: ${error.message}`);
+    }
   } finally {
-    if (page) await page.close();
+    // Clean up resources
+    if (page) await page.close().catch(console.error);
+    if (browser) await browser.close().catch(console.error);
     browsers.delete(taskId);
-    await browser.close();
   }
 }
 
