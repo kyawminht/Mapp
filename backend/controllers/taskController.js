@@ -39,28 +39,85 @@ const retryOperation = async (operation, maxRetries = MAX_RETRIES, delay = RETRY
   throw lastError;
 };
 
-// Add page recreation helper
+// Add page recreation helper with error handling
 async function createNewPage(browser, cookies) {
-  const page = await browser.newPage();
-  await page.setDefaultNavigationTimeout(120000); // Increase timeout to 2 minutes
-  await page.setDefaultTimeout(120000);
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-  await page.setCookie(...cookies);
-  
-  // Add error handlers
-  page.on('error', err => console.error('Page error:', err));
-  page.on('pageerror', err => console.error('Page error:', err));
-  
-  return page;
+  try {
+    const page = await browser.newPage();
+    await page.setDefaultNavigationTimeout(120000);
+    await page.setDefaultTimeout(120000);
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+    
+    // Set cookies with retry
+    let retries = 3;
+    while (retries > 0) {
+      try {
+        await page.setCookie(...cookies);
+        break;
+      } catch (error) {
+        retries--;
+        if (retries === 0) throw error;
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+    }
+    
+    return page;
+  } catch (error) {
+    console.error('Error creating new page:', error);
+    throw error;
+  }
 }
 
-// Main message processing function
+// Improved sendMessage function with better error handling
+async function sendMessage(page, message, taskDelays, addLog) {
+  try {
+    const selector = 'div[aria-label="Message"][contenteditable="true"][role="textbox"]';
+    await page.waitForSelector(selector, { 
+      timeout: 60000,
+      visible: true
+    });
+    
+    const clickDelay = getRandomDelay(taskDelays, 'waiting');
+    addLog(`Waiting ${clickDelay/1000} seconds before clicking...`);
+    await new Promise(resolve => setTimeout(resolve, clickDelay));
+    
+    await page.click(selector);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    addLog("Typing message...");
+    for (let char of message) {
+      if (!page.isClosed()) {
+        const typingDelay = getRandomDelay(taskDelays, 'typing');
+        await page.keyboard.type(char, { delay: typingDelay });
+      } else {
+        throw new Error('Page was closed during typing');
+      }
+    }
+
+    if (!page.isClosed()) {
+      const sendDelay = getRandomDelay(taskDelays, 'waiting');
+      addLog(`Waiting ${sendDelay/1000} seconds before sending...`);
+      await new Promise(resolve => setTimeout(resolve, sendDelay));
+      
+      await page.keyboard.press('Enter');
+      addLog("Message sent");
+      
+      const afterSendDelay = getRandomDelay(taskDelays, 'waiting');
+      addLog(`Waiting ${afterSendDelay/1000} seconds after sending...`);
+      await new Promise(resolve => setTimeout(resolve, afterSendDelay));
+    }
+  } catch (error) {
+    addLog(`Error in sendMessage: ${error.message}`);
+    throw error;
+  }
+}
+
+// Main processing function with improved error handling
 async function processMessages(taskId, cookies, friendIds, message) {
-  const taskDelays = createTaskDelays();
   let browser = null;
   let page = null;
   let processedCount = 0;
   const logs = [];
+  const taskDelays = createTaskDelays();
 
   const addLog = (message) => {
     const log = `${new Date().toISOString()} - ${message}`;
@@ -72,7 +129,6 @@ async function processMessages(taskId, cookies, friendIds, message) {
   };
 
   try {
-    // Launch browser with improved memory settings
     browser = await puppeteer.launch({
       headless: true,
       defaultViewport: null,
@@ -81,18 +137,33 @@ async function processMessages(taskId, cookies, friendIds, message) {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
         '--disable-gpu',
-        '--js-flags="--max-old-space-size=8192"', // Increase to 8GB
-        '--memory-pressure-off',
-        '--single-process' // Reduce memory usage
+        '--window-size=1920,1080'
       ]
     });
 
     browsers.set(taskId, browser);
-    page = await createNewPage(browser, cookies);
 
-    // Process each friend with improved error handling
+    // Create single page for the entire session
+    page = await createNewPage(browser, cookies);
+    
+    // Initial login
+    addLog("Navigating to Facebook...");
+    await page.goto("https://www.facebook.com", { 
+      waitUntil: 'networkidle2', 
+      timeout: 60000 
+    });
+
+    // Verify login
+    await page.waitForSelector('[aria-label="Your profile"]', { timeout: 30000 });
+    addLog("Successfully logged in using cookies.");
+
+    // Add random delay after login
+    const initialDelay = getRandomDelay(taskDelays, 'waiting');
+    addLog(`Waiting ${initialDelay/1000} seconds after login...`);
+    await new Promise(resolve => setTimeout(resolve, initialDelay));
+
+    // Process each friend using the same page
     for (const [index, friendId] of friendIds.entries()) {
       if (!tasks.has(taskId)) {
         addLog('Task was stopped by user');
@@ -100,36 +171,31 @@ async function processMessages(taskId, cookies, friendIds, message) {
       }
 
       try {
-        // Recreate page periodically or if it's null
-        if (!page || processedCount % MEMORY_CLEANUP_INTERVAL === 0) {
-          if (page) {
-            await page.close().catch(console.error);
-          }
-          page = await createNewPage(browser, cookies);
-          addLog('Created new page for better stability');
-        }
-
         addLog(`Processing friend ${friendId} (${processedCount + 1}/${friendIds.length})...`);
 
-        // Navigate with improved retry
-        await retryOperation(async () => {
-          await page.goto(`https://www.facebook.com/messages/t/${friendId}`, {
-            waitUntil: 'networkidle2',
-            timeout: 120000
-          });
-        });
+        // Navigate to friend's chat using the same page
+        let navigationSuccess = false;
+        for (let attempt = 0; attempt < 3 && !navigationSuccess; attempt++) {
+          try {
+            await page.goto(`https://www.facebook.com/messages/t/${friendId}`, {
+              waitUntil: 'networkidle2',
+              timeout: 60000
+            });
+            navigationSuccess = true;
+          } catch (error) {
+            if (attempt === 2) throw error;
+            addLog(`Navigation attempt ${attempt + 1} failed, retrying...`);
+            await new Promise(resolve => setTimeout(resolve, 5000));
+          }
+        }
 
-        // Send message with retry
-        await retryOperation(async () => {
-          await sendMessage(page, message, taskDelays, addLog);
-        });
-
+        await sendMessage(page, message, taskDelays, addLog);
         processedCount++;
+        
         if (tasks.has(taskId)) {
           tasks.get(taskId).result = { processedCount, totalCount: friendIds.length };
         }
 
-        // Add delay between friends
         if (index < friendIds.length - 1) {
           const betweenDelay = getRandomDelay(taskDelays, 'betweenFriends');
           addLog(`Waiting ${betweenDelay/1000/60} minutes before next friend...`);
@@ -138,12 +204,7 @@ async function processMessages(taskId, cookies, friendIds, message) {
 
       } catch (error) {
         addLog(`Error processing friend ${friendId}: ${error.message}`);
-        // Try to recover by creating a new page
-        if (page) {
-          await page.close().catch(console.error);
-          page = null;
-        }
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+        await new Promise(resolve => setTimeout(resolve, 10000));
       }
     }
 
@@ -157,51 +218,14 @@ async function processMessages(taskId, cookies, friendIds, message) {
       addLog(`Critical error: ${error.message}`);
     }
   } finally {
-    // Clean up resources
-    if (page) await page.close().catch(console.error);
-    if (browser) await browser.close().catch(console.error);
+    try {
+      if (page && !page.isClosed()) await page.close();
+      if (browser) await browser.close();
+    } catch (error) {
+      console.error('Error in cleanup:', error);
+    }
     browsers.delete(taskId);
   }
-}
-
-// Helper function for sending messages
-async function sendMessage(page, message, taskDelays, addLog) {
-  const selector = 'div[aria-label="Message"][contenteditable="true"][role="textbox"]';
-  await page.waitForSelector(selector, { timeout: 30000 });
-  
-  // Click textbox with delay
-  const clickDelay = getRandomDelay(taskDelays, 'waiting');
-  addLog(`Waiting ${clickDelay/1000} seconds before clicking...`);
-  await new Promise(resolve => setTimeout(resolve, clickDelay));
-  
-  await page.click(selector);
-  
-  // Type message with random delays
-  addLog("Typing message...");
-  for (let char of message) {
-    const typingDelay = getRandomDelay(taskDelays, 'typing');
-    await page.keyboard.type(char, { delay: typingDelay });
-    
-    // Add random pauses while typing
-    if (message.indexOf(char) % 10 === 0) {
-      const pauseDelay = getRandomDelay(taskDelays, 'waiting');
-      await new Promise(resolve => setTimeout(resolve, pauseDelay));
-      addLog(`Typing progress: ${Math.round((message.indexOf(char) / message.length) * 100)}%`);
-    }
-  }
-
-  // Wait before sending
-  const sendDelay = getRandomDelay(taskDelays, 'waiting');
-  addLog(`Waiting ${sendDelay/1000} seconds before sending...`);
-  await new Promise(resolve => setTimeout(resolve, sendDelay));
-
-  await page.keyboard.press('Enter');
-  addLog("Message sent");
-
-  // Wait after sending
-  const afterSendDelay = getRandomDelay(taskDelays, 'waiting');
-  addLog(`Waiting ${afterSendDelay/1000} seconds after sending...`);
-  await new Promise(resolve => setTimeout(resolve, afterSendDelay));
 }
 
 // Controller methods
